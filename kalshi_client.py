@@ -169,7 +169,14 @@ class KalshiClient:
                 })
             
             # Sort by volume_24h (descending) for true popularity ranking
-            enriched_events.sort(key=lambda x: x.get("volume_24h", 0), reverse=True)
+            import sys
+            enriched_events.sort(
+                key=lambda x: (
+                    x.get("volume_24h", 0),
+                    -(x.get("time_remaining_hours") or sys.maxsize)
+                ),
+                reverse=True
+            )
             
             # Return only the top N events as requested
             top_events = enriched_events[:limit]
