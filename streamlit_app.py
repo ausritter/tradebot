@@ -30,7 +30,7 @@ st.markdown("""
   .bet-row { background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:6px; padding:0.9rem 1.1rem; margin-bottom:0.6rem; font-family:'IBM Plex Mono',monospace; font-size:0.82rem; }
   .bet-row.hedge { border-left-color:var(--warn); }
   .bet-row.placed { border-left-color:var(--green); }
-  .log-box { background:#0a0c10; border:1px solid var(--border); border-radius:6px; padding:1rem; font-family:'IBM Plex Mono',monospace; font-size:0.78rem; line-height:1.7; max-height:380px; overflow-y:auto; color:#8fa8bf; }
+  .log-box { background:#0a0c10; border:1px solid var(--border); border-radius:6px; padding:1rem; font-family:'IBM Plex Mono',monospace; font-size:0.78rem; line-height:1.7; max-height:420px; overflow-y:auto; color:#8fa8bf; }
   .log-ok{color:var(--green);} .log-warn{color:var(--warn);} .log-err{color:var(--danger);} .log-info{color:var(--accent2);}
   .badge{display:inline-block;padding:0.15rem 0.55rem;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:0.68rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;}
   .badge-live{background:#ff4f6a22;color:var(--danger);border:1px solid #ff4f6a44;}
@@ -45,61 +45,21 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Module-level queues (accessible from any thread, no session state needed) ───
+# ── Module-level queues — the ONLY thing threads write to ───────────────────────
 _LOG_Q    = queue.Queue()
 _RESULT_Q = queue.Queue()
 
 # ── Session state defaults ───────────────────────────────────────────────────────
-for _k, _v in {"running":False,"logs":[],"bets":[],"stats":{},"run_count":0,"last_run":None}.items():
+for _k, _v in {"running":False,"logs":[],"bets":[],"stats":{},"last_run":None}.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
-# ── Drain module-level queues into session state (main thread only) ─────────────
-def drain():
-    while True:
-        try:
-            st.session_state.logs.append(_LOG_Q.get_nowait())
-        except queue.Empty:
-            break
-    while True:
-        try:
-            r = _RESULT_Q.get_nowait()
-            if r.get("done"):
-                st.session_state.running  = False
-                st.session_state.run_count += 1
-                st.session_state.last_run = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if "bets" in r:
-                st.session_state.bets  = r["bets"]
-                st.session_state.stats = r["stats"]
-        except queue.Empty:
-            break
+def _ts():
+    return datetime.now().strftime("%H:%M:%S")
 
-drain()
-
-# ── Thread-safe log (writes to module-level queue only) ──────────────────────────
 def qlog(msg, kind=""):
-    _LOG_Q.put({"ts": datetime.now().strftime("%H:%M:%S"), "msg": str(msg), "kind": kind})
-
-# ── Render helpers ────────────────────────────────────────────────────────────────
-def render_logs():
-    lines = []
-    for e in st.session_state.logs[-150:]:
-        cls = f"log-{e.get('kind','')}" if e.get("kind") else ""
-        lines.append(f'<span style="color:var(--muted)">[{e["ts"]}]</span> <span class="{cls}">{e["msg"]}</span>')
-    st.markdown(f'<div class="log-box">{"<br>".join(lines) or "<span style=color:var(--muted)>No logs yet.</span>"}</div>', unsafe_allow_html=True)
-
-def render_bet(bet):
-    conf = bet.get("confidence", 0)
-    cc   = "#39d98a" if conf >= 0.75 else ("#f5a623" if conf >= 0.5 else "#ff4f6a")
-    cls  = "hedge" if bet.get("is_hedge") else ("placed" if bet.get("placed") else "")
-    st.markdown(f"""<div class="bet-row {cls}">
-      <span style="color:#4f9eff;font-weight:600">{bet.get('ticker','—')}</span>
-      &nbsp;&nbsp;<span style="color:#00d4aa">{bet.get('action','').replace('_',' ').upper()}</span>
-      &nbsp;&nbsp;<span style="color:#fff;font-weight:600">${bet.get('amount',0):.2f}</span>
-      &nbsp;&nbsp;<span style="color:{cc};font-size:0.75rem">conf {conf:.0%}</span>
-      {'&nbsp;&nbsp;<span style="color:var(--warn);font-size:0.72rem">HEDGE</span>' if bet.get("is_hedge") else ""}
-      <br><span style="color:var(--muted);font-size:0.76rem">{str(bet.get('reasoning',''))[:140]}</span>
-    </div>""", unsafe_allow_html=True)
+    """Thread-safe log — only writes to module-level queue."""
+    _LOG_Q.put({"ts": _ts(), "msg": str(msg), "kind": kind})
 
 def apply_cfg(cfg):
     for k, v in cfg.items():
@@ -116,7 +76,27 @@ def _secret(key, default=""):
     except Exception:
         return os.getenv(key, default)
 
-# ── Bot thread (only uses module-level queues, never touches st.*) ───────────────
+def _log_html(logs):
+    lines = []
+    for e in logs[-150:]:
+        cls = f"log-{e.get('kind','')}" if e.get("kind") else ""
+        lines.append(f'<span style="color:var(--muted)">[{e["ts"]}]</span> <span class="{cls}">{e["msg"]}</span>')
+    return "<br>".join(lines) if lines else '<span style="color:var(--muted)">No logs yet.</span>'
+
+def render_bet(bet):
+    conf = bet.get("confidence", 0)
+    cc   = "#39d98a" if conf >= 0.75 else ("#f5a623" if conf >= 0.5 else "#ff4f6a")
+    cls  = "hedge" if bet.get("is_hedge") else ("placed" if bet.get("placed") else "")
+    st.markdown(f"""<div class="bet-row {cls}">
+      <span style="color:#4f9eff;font-weight:600">{bet.get('ticker','—')}</span>
+      &nbsp;&nbsp;<span style="color:#00d4aa">{bet.get('action','').replace('_',' ').upper()}</span>
+      &nbsp;&nbsp;<span style="color:#fff;font-weight:600">${bet.get('amount',0):.2f}</span>
+      &nbsp;&nbsp;<span style="color:{cc};font-size:0.75rem">conf {conf:.0%}</span>
+      {'&nbsp;&nbsp;<span style="color:var(--warn);font-size:0.72rem">HEDGE</span>' if bet.get("is_hedge") else ""}
+      <br><span style="color:var(--muted);font-size:0.76rem">{str(bet.get('reasoning',''))[:140]}</span>
+    </div>""", unsafe_allow_html=True)
+
+# ── Bot thread ────────────────────────────────────────────────────────────────────
 def _run_bot_thread(cfg, live_mode, max_exp_hours):
     apply_cfg(cfg)
     try:
@@ -133,26 +113,30 @@ def _run_bot_thread(cfg, live_mode, max_exp_hours):
         stats = {"total_bets":len(bets),"total_amount":sum(b.get("amount",0) for b in bets),
                  "placed":sum(1 for b in bets if b.get("placed")),"hedges":sum(1 for b in bets if b.get("is_hedge"))}
         qlog(f"Run complete — {len(bets)} bets generated", "ok")
-        _RESULT_Q.put({"bets": bets, "stats": stats, "done": True})
+        _RESULT_Q.put({"bets":bets,"stats":stats,"done":True})
     except ModuleNotFoundError as e:
         qlog(f"Bot modules not found ({e}) — running preview mock", "warn")
         _mock_thread(live_mode)
     except Exception as e:
         qlog(f"Bot error: {e}", "err")
-        _RESULT_Q.put({"done": True})
+        _RESULT_Q.put({"done":True})
 
 def _mock_thread(live_mode):
-    for msg, kind in [
-        ("Fetching top events from Kalshi...", "info"), ("Found 50 events", "ok"),
-        ("Fetching markets for 50 events...", "info"), ("Found 247 markets across 45 events", "ok"),
+    steps = [
+        ("Fetching top events from Kalshi...", "info"), ("✓ Found 50 events", "ok"),
+        ("Fetching markets for 50 events...", "info"), ("✓ Found 247 markets across 45 events", "ok"),
         ("Researching with Octagon Deep Research...", "info"),
         ("✓ NYC-MAYOR-2025 | Zohran 71%  Adams 13%", "ok"),
         ("✓ FED-RATE-JUNE  | Hold 62%  Cut 38%", "ok"),
-        ("Research complete for 42 events", "ok"),
-        ("Generating decisions via OpenAI...", "info"), ("Generated 34 decisions", "ok"),
+        ("✓ BTCUSD-100K-MAR | Yes 44%  No 56%", "ok"),
+        ("✓ Research complete for 42 events", "ok"),
+        ("Generating decisions via OpenAI...", "info"),
+        ("✓ Generated 34 decisions", "ok"),
         ("Placing bets (dry run)..." if not live_mode else "⚠ Placing LIVE bets...", "info" if not live_mode else "warn"),
-    ]:
-        qlog(msg, kind); time.sleep(0.7)
+    ]
+    for msg, kind in steps:
+        qlog(msg, kind)
+        time.sleep(0.8)
     bets = [
         {"ticker":"NYC-MAYOR-ZOHRAN","action":"buy_yes","amount":25.0,"confidence":0.85,"placed":live_mode,"reasoning":"Research shows 71% probability, market odds undervalue this candidate"},
         {"ticker":"FED-RATE-JUNE-HOLD","action":"buy_yes","amount":20.0,"confidence":0.72,"placed":live_mode,"reasoning":"Fed rhetoric and CPI trajectory support a hold decision"},
@@ -160,17 +144,19 @@ def _mock_thread(live_mode):
         {"ticker":"NYC-MAYOR-ZOHRAN","action":"buy_no","amount":6.25,"confidence":0.85,"placed":live_mode,"is_hedge":True,"reasoning":"Hedge 25% of main bet to protect downside"},
         {"ticker":"SENATE-GOP-2026","action":"buy_yes","amount":25.0,"confidence":0.78,"placed":live_mode,"reasoning":"Polling averages and cycle patterns favor Republican retention"},
     ]
-    _RESULT_Q.put({"bets":bets,"stats":{"total_bets":len(bets),"total_amount":sum(b["amount"] for b in bets),"placed":sum(1 for b in bets if b.get("placed")),"hedges":sum(1 for b in bets if b.get("is_hedge"))},"done":True})
+    _RESULT_Q.put({"bets":bets,"stats":{"total_bets":len(bets),"total_amount":sum(b["amount"] for b in bets),
+        "placed":sum(1 for b in bets if b.get("placed")),"hedges":sum(1 for b in bets if b.get("is_hedge"))},"done":True})
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚡ KALSHI BOT"); st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("### 🔑 API Keys")
-    kalshi_key  = st.text_input("Kalshi API Key",        type="password", value=_secret("KALSHI_API_KEY"),  placeholder="kalshi_…")
-    kalshi_priv = st.text_area("Kalshi Private Key (RSA)", height=100,    value=_secret("KALSHI_PRIVATE_KEY"), placeholder="-----BEGIN RSA PRIVATE KEY-----\n…\n-----END RSA PRIVATE KEY-----")
-    octagon_key = st.text_input("Octagon API Key",       type="password", value=_secret("OCTAGON_API_KEY"), placeholder="oct_…")
-    openai_key  = st.text_input("OpenAI API Key",        type="password", value=_secret("OPENAI_API_KEY"),  placeholder="sk-…")
-    st.markdown("<hr>", unsafe_allow_html=True); st.markdown("### ⚙️ Configuration")
+    kalshi_key  = st.text_input("Kalshi API Key",          type="password", value=_secret("KALSHI_API_KEY"),     placeholder="kalshi_…")
+    kalshi_priv = st.text_area("Kalshi Private Key (RSA)", height=100,      value=_secret("KALSHI_PRIVATE_KEY"), placeholder="-----BEGIN RSA PRIVATE KEY-----\n…\n-----END RSA PRIVATE KEY-----")
+    octagon_key = st.text_input("Octagon API Key",         type="password", value=_secret("OCTAGON_API_KEY"),    placeholder="oct_…")
+    openai_key  = st.text_input("OpenAI API Key",          type="password", value=_secret("OPENAI_API_KEY"),     placeholder="sk-…")
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("### ⚙️ Configuration")
     use_demo       = st.checkbox("Use Demo Environment",    value=_secret("KALSHI_USE_DEMO","true")=="true")
     skip_existing  = st.checkbox("Skip Existing Positions", value=True)
     enable_hedging = st.checkbox("Enable Hedging",          value=True)
@@ -194,12 +180,15 @@ with st.sidebar:
         apply_cfg(current_cfg); st.success("Config applied ✓")
 
 # ── Header ────────────────────────────────────────────────────────────────────────
-c1, c2 = st.columns([3,1])
-with c1: st.markdown("# Kalshi Deep Trading Bot")
-with c2:
+hc1, hc2 = st.columns([3,1])
+with hc1: st.markdown("# Kalshi Deep Trading Bot")
+with hc2:
     ec = "badge-demo" if use_demo else "badge-live"
-    rc = "badge-running" if st.session_state.running else "badge-idle"
-    st.markdown(f'<div style="text-align:right;padding-top:1.5rem"><span class="badge {ec}">{"DEMO" if use_demo else "LIVE"}</span> <span class="badge {rc}">{"RUNNING" if st.session_state.running else "IDLE"}</span></div>', unsafe_allow_html=True)
+    sc = "badge-running" if st.session_state.running else "badge-idle"
+    st.markdown(f'<div style="text-align:right;padding-top:1.5rem">'
+                f'<span class="badge {ec}">{"DEMO" if use_demo else "LIVE"}</span> '
+                f'<span class="badge {sc}">{"RUNNING" if st.session_state.running else "IDLE"}</span></div>',
+                unsafe_allow_html=True)
 
 st.markdown('<div class="warn-box">⚠️ <strong>Financial Disclaimer:</strong> Educational/research purposes only. Trading involves significant financial risk. Not financial advice. Use at your own risk.</div>', unsafe_allow_html=True)
 
@@ -207,47 +196,49 @@ st.markdown('<div class="warn-box">⚠️ <strong>Financial Disclaimer:</strong>
 s = st.session_state.stats
 for col, title, val, sz in zip(st.columns(5),
     ["TOTAL BETS","TOTAL AMOUNT","PLACED","HEDGES","LAST RUN"],
-    [s.get("total_bets","—"),f"${s.get('total_amount',0):,.2f}",s.get("placed","—"),s.get("hedges","—"),st.session_state.last_run or "—"],
-    ["1.6rem","1.6rem","1.6rem","1.6rem","0.95rem"]):
+    [s.get("total_bets","—"), f"${s.get('total_amount',0):,.2f}", s.get("placed","—"), s.get("hedges","—"), st.session_state.last_run or "—"],
+    ["1.6rem","1.6rem","1.6rem","1.6rem","0.9rem"]):
     with col:
         st.markdown(f'<div class="card"><div class="card-title">{title}</div><div class="card-value" style="font-size:{sz}">{val}</div></div>', unsafe_allow_html=True)
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
 # ── Run controls ──────────────────────────────────────────────────────────────────
-rc2, ic = st.columns([2,2])
-with rc2:
+rcc, icc = st.columns([2,2])
+with rcc:
     live_mode   = st.toggle("🔴 Live Trading Mode", value=False)
     max_exp_hrs = st.number_input("Max Expiration Hours (0 = no filter)", 0, 168, 0)
     max_exp_hrs = max_exp_hrs if max_exp_hrs > 0 else None
-with ic:
+with icc:
     if live_mode:
-        st.markdown('<div class="warn-box" style="margin-top:1.8rem">🔴 <strong>LIVE MODE:</strong> Real money will be wagered. Verify credentials and settings.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="warn-box" style="margin-top:1.8rem">🔴 <strong>LIVE MODE:</strong> Real money will be wagered.</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div style="margin-top:1.8rem;padding:0.8rem 1rem;background:#4f9eff11;border:1px solid #4f9eff33;border-radius:6px;font-size:0.82rem;color:#4f9eff">🔵 <strong>DRY RUN:</strong> Simulates everything without placing real bets.</div>', unsafe_allow_html=True)
+        st.markdown('<div style="margin-top:1.8rem;padding:0.8rem 1rem;background:#4f9eff11;border:1px solid #4f9eff33;border-radius:6px;font-size:0.82rem;color:#4f9eff">🔵 <strong>DRY RUN:</strong> No real bets placed.</div>', unsafe_allow_html=True)
 
-b1, b2, b3 = st.columns(3)
-with b1:
-    if st.button("▶ Run Bot", disabled=st.session_state.running, use_container_width=True):
-        # Clear module-level queues
-        for q in [_LOG_Q, _RESULT_Q]:
-            while not q.empty():
-                try: q.get_nowait()
-                except: break
-        st.session_state.update({"running":True,"logs":[],"bets":[],"stats":{}})
-        # Seed initial logs directly (main thread, safe)
-        st.session_state.logs.append({"ts":datetime.now().strftime("%H:%M:%S"),"msg":"Starting Kalshi Deep Trading Bot...","kind":"info"})
-        st.session_state.logs.append({"ts":datetime.now().strftime("%H:%M:%S"),"msg":f"Mode: {'LIVE' if live_mode else 'DRY RUN'} | Env: {'DEMO' if use_demo else 'PRODUCTION'}","kind":"info"})
-        threading.Thread(target=_run_bot_thread, args=(current_cfg, live_mode, max_exp_hrs), daemon=True).start()
-        st.rerun()
-with b2:
-    if st.button("⏹ Stop", disabled=not st.session_state.running, use_container_width=True):
-        st.session_state.running = False
-        st.session_state.logs.append({"ts":datetime.now().strftime("%H:%M:%S"),"msg":"Stopped by user.","kind":"warn"})
-        st.rerun()
-with b3:
-    if st.button("🗑 Clear", use_container_width=True):
-        st.session_state.update({"logs":[],"bets":[],"stats":{}}); st.rerun()
+bb1, bb2, bb3 = st.columns(3)
+with bb1:
+    run_clicked = st.button("▶ Run Bot", disabled=st.session_state.running, use_container_width=True)
+with bb2:
+    stop_clicked = st.button("⏹ Stop", disabled=not st.session_state.running, use_container_width=True)
+with bb3:
+    clear_clicked = st.button("🗑 Clear", use_container_width=True)
+
+if clear_clicked:
+    st.session_state.update({"logs":[],"bets":[],"stats":{}}); st.rerun()
+
+if stop_clicked:
+    st.session_state.running = False; st.rerun()
+
+if run_clicked:
+    # Flush queues
+    for q in [_LOG_Q, _RESULT_Q]:
+        while not q.empty():
+            try: q.get_nowait()
+            except: break
+    st.session_state.update({"running":True,"logs":[],"bets":[],"stats":{}})
+    apply_cfg(current_cfg)
+    threading.Thread(target=_run_bot_thread, args=(current_cfg, live_mode, max_exp_hrs), daemon=True).start()
+    # Don't rerun — fall through to the polling loop below
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -255,24 +246,11 @@ st.markdown("<hr>", unsafe_allow_html=True)
 t1, t2, t3, t4 = st.tabs(["📋 Bets", "🖥 Logs", "🔧 Raw Config", "❓ Help"])
 
 with t1:
-    bets = st.session_state.bets
-    if not bets:
-        st.markdown('<p style="color:var(--muted);font-family:IBM Plex Mono;font-size:0.85rem">No bets yet. Run the bot to see results.</p>', unsafe_allow_html=True)
-    else:
-        f1, f2 = st.columns(2)
-        with f1: sh = st.checkbox("Show hedges", value=True)
-        with f2: mf = st.slider("Min confidence", 0.0, 1.0, 0.0, 0.05)
-        filtered = [b for b in bets if (sh or not b.get("is_hedge")) and b.get("confidence",1) >= mf]
-        st.markdown(f'<p style="color:var(--muted);font-size:0.78rem;font-family:IBM Plex Mono">Showing {len(filtered)} of {len(bets)} bets</p>', unsafe_allow_html=True)
-        for bet in filtered: render_bet(bet)
-        if filtered:
-            st.download_button("⬇ Export JSON", json.dumps(filtered, indent=2), f"kalshi_bets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", "application/json")
+    bets_placeholder = st.empty()
 
 with t2:
-    render_logs()
-    if st.session_state.running:
-        st.markdown('<p style="color:var(--accent);font-family:IBM Plex Mono;font-size:0.78rem">⬤ Running… auto-refreshing.</p>', unsafe_allow_html=True)
-        time.sleep(2); st.rerun()
+    log_placeholder = st.empty()
+    status_placeholder = st.empty()
 
 with t3:
     display = {k:("***" if "KEY" in k or "PRIVATE" in k else v) for k,v in current_cfg.items()}
@@ -310,3 +288,69 @@ MAX_BET_AMOUNT = "25.0"
 - **Octagon**: [app.octagonai.co](https://app.octagonai.co/signup)
 - **OpenAI**: [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 """)
+
+# ── Live polling loop (runs in main thread while bot is active) ──────────────────
+# This is the KEY change: instead of st.rerun() from a thread,
+# we block the main thread in a loop, draining queues and updating placeholders.
+if st.session_state.running:
+    status_placeholder.markdown(
+        '<p style="color:var(--accent);font-family:IBM Plex Mono;font-size:0.78rem">⬤ Running… updating live.</p>',
+        unsafe_allow_html=True)
+
+    while st.session_state.running:
+        # Drain log queue into session state
+        new_logs = False
+        while True:
+            try:
+                st.session_state.logs.append(_LOG_Q.get_nowait())
+                new_logs = True
+            except queue.Empty:
+                break
+
+        # Check for results
+        done = False
+        while True:
+            try:
+                r = _RESULT_Q.get_nowait()
+                if "bets"  in r: st.session_state.bets  = r["bets"];  st.session_state.stats = r["stats"]
+                if r.get("done"):
+                    st.session_state.running  = False
+                    st.session_state.last_run = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    done = True
+            except queue.Empty:
+                break
+
+        # Update log display
+        log_placeholder.markdown(
+            f'<div class="log-box">{_log_html(st.session_state.logs)}</div>',
+            unsafe_allow_html=True)
+
+        if done:
+            status_placeholder.empty()
+            st.rerun()  # Final rerun to update stat cards + bets tab
+            break
+
+        time.sleep(1)
+
+else:
+    # Static render when not running
+    log_placeholder.markdown(
+        f'<div class="log-box">{_log_html(st.session_state.logs)}</div>',
+        unsafe_allow_html=True)
+
+    bets = st.session_state.bets
+    if not bets:
+        bets_placeholder.markdown(
+            '<p style="color:var(--muted);font-family:IBM Plex Mono;font-size:0.85rem">No bets yet. Run the bot to see results.</p>',
+            unsafe_allow_html=True)
+    else:
+        with bets_placeholder.container():
+            f1, f2 = st.columns(2)
+            with f1: sh = st.checkbox("Show hedges", value=True)
+            with f2: mf = st.slider("Min confidence", 0.0, 1.0, 0.0, 0.05)
+            filtered = [b for b in bets if (sh or not b.get("is_hedge")) and b.get("confidence",1) >= mf]
+            st.markdown(f'<p style="color:var(--muted);font-size:0.78rem;font-family:IBM Plex Mono">Showing {len(filtered)} of {len(bets)} bets</p>', unsafe_allow_html=True)
+            for bet in filtered: render_bet(bet)
+            if filtered:
+                st.download_button("⬇ Export JSON", json.dumps(filtered, indent=2),
+                    f"kalshi_bets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", "application/json")
