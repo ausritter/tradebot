@@ -330,11 +330,10 @@ class KalshiClient:
             data = response.json()
             market = data.get("market", {})
             
-            # Get specific fields
-            yes_bid = market.get("yes_bid", 0)
-            no_bid = market.get("no_bid", 0)
-            yes_ask = market.get("yes_ask", 0)
-            no_ask = market.get("no_ask", 0)
+            yes_bid = market.get("yes_bid_dollars", market.get("yes_bid", 0))
+            no_bid = market.get("no_bid_dollars", market.get("no_bid", 0))
+            yes_ask = market.get("yes_ask_dollars", market.get("yes_ask", 0))
+            no_ask = market.get("no_ask_dollars", market.get("no_ask", 0))
             
             # Note: Event-level filtering is already done in get_events()
             return {
