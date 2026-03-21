@@ -142,6 +142,11 @@ class KalshiClient:
                         logger.warning(f"Could not parse strike_date '{strike_date_str}' for event {event.get('event_ticker', '')}: {e}")
                         # Continue without time filtering for this event
                 
+                # If max expiration filter is set, skip events with no expiration date
+                if filter_enabled and not strike_date_str:
+                    events_dropped_by_expiration += 1
+                    continue
+
                 # If no top markets selected, skip event
                 if not top_markets:
                     continue
